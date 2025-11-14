@@ -5,61 +5,51 @@ pipeline {
         LABS = credentials('labcreds')
         JAVA_HOME = '/opt/bitnami/java'
         PATH = "${env.JAVA_HOME}/bin:${env.PATH}"
+
+        // CRITICAL FIXES
+        PIPENV_IGNORE_VIRTUALENVS = "1"
+        PIPENV_VENV_IN_PROJECT = "1"
     }
 
     stages {
 
         stage('Setup Virtual Environment') {
             steps {
-                script {
-                    sh 'python3 -m venv retail_pipeline_venv'
-                    sh './retail_pipeline_venv/bin/pip install --upgrade pip'
-                    sh './retail_pipeline_venv/bin/pip install pipenv'
-                }
+                sh 'python3 -m venv retail_pipeline_venv'
+                sh './retail_pipeline_venv/bin/pip install --upgrade pip'
+                sh './retail_pipeline_venv/bin/pip install pipenv'
             }
         }
 
         stage('Install Dependencies') {
             steps {
-                script {
-                    // Force pipenv to use our venv Python
-                    sh './retail_pipeline_venv/bin/pipenv --python ./retail_pipeline_venv/bin/python install --deploy'
+                // Tell pipenv to use our venv Python, no hidden envs
+                sh './retail_pipeline_venv/bin/pipenv --python ./retail_pipeline_venv/bin/python install --deploy'
 
-                    // FIX: install exceptiongroup manually (pipenv sometimes misses it)
-                    sh './retail_pipeline_venv/bin/pip install exceptiongroup'
-                }
+                // Ensure pytest dependency is present
+                sh './retail_pipeline_venv/bin/pipenv run pip install exceptiongroup'
             }
         }
 
         stage('Test') {
             steps {
-                script {
-                    sh 'echo "JAVA_HOME: $JAVA_HOME"'
-                    sh 'echo "PATH: $PATH"'
-
-                    // IMPORTANT FIX: run pytest through pipenv Python
-                    sh './retail_pipeline_venv/bin/pipenv run python -m pytest'
-                }
+                sh './retail_pipeline_venv/bin/pipenv run python -m pytest'
             }
         }
 
         stage('Package') {
             steps {
-                script {
-                    sh 'zip -r retailproject.zip . -x "retail_pipeline_venv/*"'
-                }
+                sh 'zip -r retailproject.zip . -x "retail_pipeline_venv/*"'
             }
         }
 
         stage('Deploy') {
             steps {
-                script {
-                    sh """
-                        sshpass -p "${LABS_PSW}" \
-                        scp -o StrictHostKeyChecking=no retailproject.zip \
-                        ${LABS_USR}@g02.itversity.com:/home/${LABS_USR}/retailproject
-                    """
-                }
+                sh """
+                    sshpass -p "${LABS_PSW}" \
+                    scp -o StrictHostKeyChecking=no retailproject.zip \
+                    ${LABS_USR}@g02.itversity.com:/home/${LABS_USR}/retailproject
+                """
             }
         }
     }
