@@ -3,37 +3,83 @@ pipeline {
 
     environment {
         LABS = credentials('labcreds')
+        // default fallback; we'll override it dynamically in 'Prepare Java' stage
         JAVA_HOME = '/opt/bitnami/java'
         PATH = "${env.JAVA_HOME}/bin:${env.PATH}"
-
-        // CRITICAL FIXES
         PIPENV_IGNORE_VIRTUALENVS = "1"
         PIPENV_VENV_IN_PROJECT = "1"
     }
 
     stages {
+        stage('Prepare Java (detect / install)') {
+            steps {
+                script {
+                    // Try to find system java
+                    def javaWhich = sh(script: "which java || true", returnStdout: true).trim()
+
+                    if (!javaWhich) {
+                        // Try to install OpenJDK (only works if agent gives sudo)
+                        echo "No 'java' found on system. Attempting to install openjdk-11-jdk (requires sudo)."
+                        // If your node doesn't allow sudo, this will fail — see Docker option below.
+                        sh """
+                            sudo apt-get update -y
+                            sudo apt-get install -y openjdk-11-jdk || sudo apt-get install -y default-jdk
+                        """
+                        javaWhich = sh(script: "which java || true", returnStdout: true).trim()
+                    } else {
+                        echo "Found java at: ${javaWhich}"
+                    }
+
+                    if (!javaWhich) {
+                        error("No Java found and automatic install failed. Use a node with Java installed or use Docker agent (see pipeline notes).")
+                    }
+
+                    // Resolve JAVA_HOME from java binary path: readlink -f /usr/bin/java -> /usr/lib/jvm/.../bin/java
+                    def resolved = sh(script: "readlink -f ${javaWhich} | sed 's:/bin/java::'", returnStdout: true).trim()
+                    if (!resolved) {
+                        error("Failed to determine JAVA_HOME from ${javaWhich}")
+                    }
+
+                    // Export into pipeline env so subsequent stages pick it up
+                    env.JAVA_HOME = resolved
+                    env.PATH = "${env.JAVA_HOME}/bin:${env.PATH}"
+                    echo "Set JAVA_HOME to ${env.JAVA_HOME}"
+                }
+            }
+        }
 
         stage('Setup Virtual Environment') {
             steps {
-                sh 'python3 -m venv retail_pipeline_venv'
-                sh './retail_pipeline_venv/bin/pip install --upgrade pip'
-                sh './retail_pipeline_venv/bin/pip install pipenv'
+                script {
+                    sh 'python3 -m venv retail_pipeline_venv'
+                    sh './retail_pipeline_venv/bin/pip install --upgrade pip'
+                    sh './retail_pipeline_venv/bin/pip install pipenv'
+                }
             }
         }
 
         stage('Install Dependencies') {
             steps {
-                // Tell pipenv to use our venv Python, no hidden envs
-                sh './retail_pipeline_venv/bin/pipenv --python ./retail_pipeline_venv/bin/python install --deploy'
-
-                // Ensure pytest dependency is present
-                sh './retail_pipeline_venv/bin/pipenv run pip install exceptiongroup'
+                script {
+                    sh './retail_pipeline_venv/bin/pipenv --python ./retail_pipeline_venv/bin/python install --deploy'
+                    // make sure exceptiongroup is present for pytest on py3.10
+                    sh './retail_pipeline_venv/bin/pipenv run pip install exceptiongroup'
+                }
             }
         }
 
         stage('Test') {
             steps {
-                sh './retail_pipeline_venv/bin/pipenv run python -m pytest'
+                script {
+                    // Run tests under bash so spark's scripts use bash arrays correctly.
+                    // Also ensure we use the pipenv python (which we've forced to our venv)
+                    sh '''bash -lc '
+                        echo "JAVA_HOME: $JAVA_HOME"
+                        echo "java -version:"
+                        java -version || true
+                        ./retail_pipeline_venv/bin/pipenv run python -m pytest -q
+                    ' '''
+                }
             }
         }
 
@@ -45,11 +91,13 @@ pipeline {
 
         stage('Deploy') {
             steps {
-                sh """
-                    sshpass -p "${LABS_PSW}" \
-                    scp -o StrictHostKeyChecking=no retailproject.zip \
-                    ${LABS_USR}@g02.itversity.com:/home/${LABS_USR}/retailproject
-                """
+                script {
+                    sh """
+                        sshpass -p "${LABS_PSW}" \
+                        scp -o StrictHostKeyChecking=no retailproject.zip \
+                        ${LABS_USR}@g02.itversity.com:/home/${LABS_USR}/retailproject
+                    """
+                }
             }
         }
     }
