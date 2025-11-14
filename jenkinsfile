@@ -1,24 +1,68 @@
 pipeline {
     agent any
+
+    environment {
+        LABS = credentials('labcreds')
+        JAVA_HOME = '/opt/bitnami/java'
+        PATH = "${env.JAVA_HOME}/bin:${env.PATH}"
+    }
+
     stages {
-        stage('Build') {
+
+        stage('Setup Virtual Environment') {
             steps {
-                echo "build completed successfully"
+                script {
+                    // Create virtual environment
+                    sh 'python3 -m venv retail_pipeline_venv'
+
+                    // Upgrade pip and install pipenv
+                    sh './retail_pipeline_venv/bin/pip install --upgrade pip'
+                    sh './retail_pipeline_venv/bin/pip install pipenv'
+                }
             }
         }
+
+        stage('Install Dependencies') {
+            steps {
+                script {
+                    // Install dependencies from Pipfile
+                    sh './retail_pipeline_venv/bin/pipenv install --deploy'
+                }
+            }
+        }
+
         stage('Test') {
             steps {
-                echo "test completed successfully"
+                script {
+                    // Check Java is available for PySpark
+                    sh 'echo "JAVA_HOME: $JAVA_HOME"'
+                    sh 'echo "PATH: $PATH"'
+
+                    // Run pytest inside pipenv environment
+                    sh './retail_pipeline_venv/bin/pipenv run pytest'
+                }
             }
         }
+
         stage('Package') {
             steps {
-                echo "package completed successfully"
+                script {
+                    // Zip all except venv folder
+                    sh 'zip -r retailproject.zip . -x "retail_pipeline_venv/*"'
+                }
             }
         }
+
         stage('Deploy') {
             steps {
-                echo "deploy completed successfully"
+                script {
+                    // Upload via SCP (fixed multi-line issue)
+                    sh """
+                        sshpass -p "${LABS_PSW}" \
+                        scp -o StrictHostKeyChecking=no retailproject.zip \
+                        ${LABS_USR}@g02.itversity.com:/home/${LABS_USR}/retailproject
+                    """
+                }
             }
         }
     }
