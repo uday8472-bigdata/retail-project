@@ -12,10 +12,7 @@ pipeline {
         stage('Setup Virtual Environment') {
             steps {
                 script {
-                    // Create virtual environment
                     sh 'python3 -m venv retail_pipeline_venv'
-
-                    // Upgrade pip and install pipenv
                     sh './retail_pipeline_venv/bin/pip install --upgrade pip'
                     sh './retail_pipeline_venv/bin/pip install pipenv'
                 }
@@ -25,9 +22,11 @@ pipeline {
         stage('Install Dependencies') {
             steps {
                 script {
-                    // Install dependencies from Pipfile
+                    // Force pipenv to use our venv Python
                     sh './retail_pipeline_venv/bin/pipenv --python ./retail_pipeline_venv/bin/python install --deploy'
 
+                    // FIX: install exceptiongroup manually (pipenv sometimes misses it)
+                    sh './retail_pipeline_venv/bin/pip install exceptiongroup'
                 }
             }
         }
@@ -35,12 +34,11 @@ pipeline {
         stage('Test') {
             steps {
                 script {
-                    // Check Java is available for PySpark
                     sh 'echo "JAVA_HOME: $JAVA_HOME"'
                     sh 'echo "PATH: $PATH"'
 
-                    // Run pytest inside pipenv environment
-                    sh './retail_pipeline_venv/bin/pipenv run pytest'
+                    // IMPORTANT FIX: run pytest through pipenv Python
+                    sh './retail_pipeline_venv/bin/pipenv run python -m pytest'
                 }
             }
         }
@@ -48,7 +46,6 @@ pipeline {
         stage('Package') {
             steps {
                 script {
-                    // Zip all except venv folder
                     sh 'zip -r retailproject.zip . -x "retail_pipeline_venv/*"'
                 }
             }
@@ -57,7 +54,6 @@ pipeline {
         stage('Deploy') {
             steps {
                 script {
-                    // Upload via SCP (fixed multi-line issue)
                     sh """
                         sshpass -p "${LABS_PSW}" \
                         scp -o StrictHostKeyChecking=no retailproject.zip \
