@@ -26,7 +26,8 @@ pipeline {
             steps {
                 script {
                     // Install dependencies from Pipfile
-                    sh './retail_pipeline_venv/bin/pipenv install --deploy'
+                    sh './retail_pipeline_venv/bin/pipenv --python ./retail_pipeline_venv/bin/python install --deploy'
+
                 }
             }
         }
